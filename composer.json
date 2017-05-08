@@ -1,0 +1,25 @@
+{
+    "name": "noroman/progress-bar-cli",
+    "description": "Progress bar CLI",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Novikov Roman",
+            "email": "service.for.roman@gmail.com"
+        }
+    ],
+    "keywords": [
+        "progressbar",
+        "progress",
+        "cli"
+    ],
+    "created": 2017,
+    "minimum-stability": "stable",
+    "require": {},
+    "autoload": {
+        "psr-4": {
+            "ProgressBarCLI\\": "src/"
+        }
+    }
+}
