@@ -16,14 +16,13 @@ class ProgressBarCLI
     const ENCODING = 'utf-8';
     const CURSOR_HIDE = "\033[?25l";
     const CURSOR_SHOW = "\033[?25h";
-
     const COLOR_NORMAL = "\033[0m";
     const COLOR_RED = "\033[0;31m";
     const COLOR_GREEN = "\033[0;32m";
 
-    private $width = 80; // ширина строки в символах
-    private $max; // максимальное количество checkpoints
-
+    private $width;
+    private $max;
+    private $stream;
     private $current;
     private $advancement;
     private $properties = [
@@ -33,12 +32,18 @@ class ProgressBarCLI
         'currentPosChar', // символ текущей точки выполнения, по-умолчанию ">"
         'remainingBarChar', // символ следующей точки выполнения, по-умолчанию "-"
     ];
-    private $assembledString;
 
-    public function __construct($max, $width = 80)
+    /**
+     * ProgressBarCLI constructor.
+     * @param int $max максимальное количество checkpoints
+     * @param int $width ширина строки в символах
+     * @param resource $stream
+     */
+    public function __construct($max, $width = 80, $stream = STDOUT)
     {
         $this->max = (int)$max;
         $this->width = (int)$width;
+        $this->stream = $stream;
         $this->format = '#current#/#max# [#bar#] #percent# #eta#';
         $this->remainingBarChar = '-';
         $this->doneBarChar = '=';
@@ -102,14 +107,14 @@ class ProgressBarCLI
      */
     private function display($stop = false)
     {
-
         $isEnd = $stop || ($this->current == $this->max);
-        $buffer = $this->dataCollection()->buildString();
+        $buffer = $this->buildString();
         $eolCharacter = "\r";
         if ($isEnd) {
-            $pattern = '/(\d{2}:\d{2}:\d{2})/ui';
+            $pattern = '/(\d{2}:\d{2}:\d{2})/';
             if ($stop) { // время красным
-                $buffer = preg_replace($pattern, self::COLOR_RED . '$1' . self::COLOR_NORMAL, $buffer);
+                $replace = self::COLOR_RED . '$1' . self::COLOR_NORMAL;
+                $buffer = preg_replace($pattern, $replace, $buffer);
             } else { // заменим время на complete
                 $complete = self::COLOR_GREEN . 'Complete' . self::COLOR_NORMAL;
                 $buffer = preg_replace($pattern, $complete, $buffer);
@@ -117,22 +122,7 @@ class ProgressBarCLI
             $this->reset();
             $eolCharacter = "\n";
         }
-        echo $buffer . $eolCharacter;
-        return $this;
-    }
-
-    /**
-     * Получим данные для сбора строки
-     */
-    private function dataCollection()
-    {
-        $this->assembledString = [
-            'current' => $this->current,
-            'max' => $this->max,
-            'percent' => $this->percentString(),
-            'eta' => $this->getETA(),
-            'bar' => $this->getBar(),
-        ];
+        fprintf($this->stream, '%s', $buffer . $eolCharacter);
         return $this;
     }
 
@@ -143,22 +133,23 @@ class ProgressBarCLI
     private function buildString()
     {
         $buffer = $this->format;
-        $buffer = str_replace('#current#', $this->assembledString['current'], $buffer);
-        $buffer = str_replace('#max#', $this->assembledString['max'], $buffer);
-        $buffer = str_replace('#percent#', $this->assembledString['percent'], $buffer);
-        $buffer = str_replace('#eta#', $this->assembledString['eta'], $buffer);
-        $buffer = str_replace('#bar#', $this->assembledString['bar'], $buffer);
+        $buffer = str_replace('#current#', $this->current, $buffer);
+        $buffer = str_replace('#max#', $this->max, $buffer);
+        $buffer = str_replace('#percent#', $this->percentString(), $buffer);
+        $buffer = str_replace('#eta#', $this->getETA(), $buffer);
+        $buffer = str_replace('#bar#', $this->getBar($buffer), $buffer);
         return str_pad($buffer, $this->width, ' ', STR_PAD_RIGHT);
     }
 
     /**
      * Скрыть курсор
-     * @param resource $stream
      * @return $this
+     * @internal param resource $stream
      */
-    private function hideCursor($stream = STDOUT)
+    private function hideCursor()
     {
-        fprintf($stream, self::CURSOR_HIDE);
+        $stream = $this->stream;
+        fprintf($this->stream, self::CURSOR_HIDE);
         register_shutdown_function(function () use ($stream) {
             fprintf($stream, self::CURSOR_SHOW);
         });
@@ -182,27 +173,25 @@ class ProgressBarCLI
     private function getETA()
     {
         if (count($this->advancement) == 1) {
-            return '--:--:--'; // с пробелом для выравнивания
+            return '--:--:--';
         }
         $timeForCurrent = $this->advancement[$this->current];
         $initialTime = $this->advancement[0];
         $seconds = ($timeForCurrent - $initialTime);
         $percent = ($this->current * 100) / $this->max;
         $estimatedSecondsToEnd = intval($seconds * 100 / $percent) - $seconds;
-        $hoursCount = intval($estimatedSecondsToEnd / 3600);
-        $rest = ($estimatedSecondsToEnd % 3600);
-        $minutesCount = intval($rest / 60);
-        $secondsCount = ($rest % 60);
-        return sprintf("%02d:%02d:%02d", $hoursCount, $minutesCount, $secondsCount);
+        return date('H:i:s', mktime(0, 0, $estimatedSecondsToEnd));
     }
 
     /**
      * Получим строку bar
+     * @param $buffer
      * @return string
      */
-    private function getBar()
+    private function getBar($buffer)
     {
-        $lengthAvailable = $this->width - $this->len();
+        $buffer = str_replace('#bar#', '', $buffer);
+        $lengthAvailable = $this->width - mb_strlen($buffer, self::ENCODING);
         $barArray = array_fill(0, $lengthAvailable, $this->remainingBarChar);
         $position = intval(($this->current * $lengthAvailable) / $this->max);
         for ($i = $position; $i >= 0; --$i) {
@@ -220,14 +209,5 @@ class ProgressBarCLI
         $this->current = 0;
         $this->advancement = [$this->current => time()];
         return $this;
-    }
-
-    /**
-     * Рассчитать длину сформированной строки
-     * @return int
-     */
-    private function len()
-    {
-        return mb_strlen(implode(' ', $this->assembledString), self::ENCODING);
     }
 }
